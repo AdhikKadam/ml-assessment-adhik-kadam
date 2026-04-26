@@ -1,23 +1,66 @@
-B1. Problem Formulation
-(a) Machine Learning Formulation
-To maximize sales, we need to predict the outcome of various promotional "treatments" based on store-specific contexts.
-•	Target Variable (y): The number of items sold (Sales Volume) per store per month.
-•	Candidate Input Features (X):
-o	Store Characteristics: Location type (Urban, Semi-urban, Rural), store size (sq. ft), and local competition density.
-o	Demographics: Average income level, age distribution, and loyalty member density of the local area.
-o	External Factors: Month/Seasonality, footfall trends, and holiday markers.
-o	Actionable Variable: The Promotion Type (the 5 categories).
-•	Problem Type: This is a Supervised Learning: Regression problem.
-o	Justification: The target (items sold) is a continuous numerical value. While the promotions are categorical, the model's goal is to estimate a quantity. Once the model is trained, the retailer can perform Prescriptive Analytics by "plugging in" all five promotion types for a specific store and selecting the one that yields the highest predicted volume.
-(b) Target Variable: Sales Volume vs. Revenue
-While revenue keeps the lights on, Items Sold is often a cleaner signal for "promotion effectiveness" for the following reasons:
-1.	Price Neutrality: Revenue can be skewed by high-ticket items. Selling one $500 coat generates more revenue than ten $30 t-shirts, but the t-shirt sale might indicate a much more successful "BOGO" campaign.
-2.	Inventory Impact: Promotions are often used to clear stock or increase market penetration. Volume directly measures consumer engagement and "basket size," whereas revenue can be heavily influenced by price changes or inflation.
-3.	The Broader Principle: This illustrates Alignment with Objective. In ML, the target variable must be a direct proxy for the behavior you wish to influence. If you want to measure customer response, count the responses (items sold); if you want to measure financial margin, use profit. Choosing a variable that is too "noisy" (like revenue, which fluctuates with price) leads to poor model generalization.
-(c) Alternative Modeling Strategy
-A "Global Model" risks washing out the nuances of rural vs. urban behavior. Instead, I propose a Clustered Modeling Approach (or Segmented Models).
-The Strategy:
-1.	Segment the Stores: Group the 50 stores into clusters (e.g., using K-Means) based on location type and demographics rather than just geography.
-2.	Train Segment-Specific Models: Create three distinct models—one for Urban, one for Semi-urban, and one for Rural.
-3.	Justification: * Feature Interaction: Rural customers might be highly sensitive to "Flat Discounts" due to price consciousness, while Urban customers might prefer "Loyalty Points" or "Free Gifts."
-o	Variance Reduction: A global model might try to find an "average" that fits no one. Segmented models allow the weights of the input features to differ significantly. For instance, "Competition Density" might be a massive predictor in Urban centers but statistically irrelevant in isolated Rural areas.
+# Scenario: Promotion Effectiveness at a Fashion Retail Chain
+
+## B1. Problem Formulation
+
+### (a) Machine Learning Formulation
+To determine the optimal promotion strategy for individual store locations, the scenario is formulated as a **Supervised Learning: Regression** problem, specifically geared toward continuous count estimation. Alternatively, it can be framed as an **Uplift Modeling** problem to measure incremental causal impact.
+
+* **Target Variable ($y$):** Sales Volume (number of items sold per store per month). 
+* **Candidate Input Features ($X$):**
+    * **Store Meta-Features:** Floor space (sq. ft.), location category (Urban, Semi-urban, Rural), local competition density index.
+    * **Demographic Context:** Local median income, average age, loyalty program penetration rate.
+    * **Temporal & Contextual Features:** Seasonality index, holiday/festival flags, historical baseline footfall.
+    * **Treatment Variable:** Promotion Type (Categorical: Flat Discount, BOGO, Free Gift, Category-Specific, Loyalty Bonus).
+* **Justification:** The primary business objective is to maximize a quantitative output (items sold). A regression model allows for the estimation of expected sales volume for any given promotion type. In a production environment, the model will simulate all five promotional treatments for a given store-month, and the business will select the treatment yielding the highest predicted volume (Prescriptive Analytics).
+
+### (b) Target Variable: Sales Volume vs. Total Revenue
+Measuring performance via Total Sales Revenue introduces critical statistical noise due to price variance. **Sales Volume (Items Sold)** is the superior target variable for the following reasons:
+
+1. **Price Isolation:** Revenue is heavily skewed by item price points. A highly successful promotion moving hundreds of low-cost items (e.g., socks) might show a lower revenue spike than a poorly performing promotion moving a few high-cost items (e.g., leather jackets). Volume directly measures the core objective: consumer engagement and transaction generation.
+2. **Margin and Cannibalization:** Certain promotions (like Flat Discounts) artificially depress revenue per item. Evaluating by revenue penalizes the promotion for doing exactly what it was designed to do (lower price to drive volume).
+3. **Broader ML Principle (Objective Alignment):** This illustrates the principle of **Proxy Variable Alignment**. In applied machine learning, the mathematical target variable must align directly with the specific behavior the algorithm is meant to optimize. If the model optimizes for revenue, it will bias toward stores that sell luxury goods, regardless of promotional effectiveness.
+
+### (c) Alternative Modelling Strategy
+A single global model suffers from underfitting local nuances, while training 50 independent models risks high variance and overfitting due to limited sample sizes per store. 
+
+**Proposed Alternative: Hierarchical (Mixed-Effects) Modeling or Clustered Segmentation**
+1. **Cluster-Based Strategy:** Apply an unsupervised clustering algorithm (e.g., K-Means or DBSCAN) to group stores based on multidimensional similarities (e.g., high-income rural, high-competition urban) rather than geography alone. Train separate LightGBM or XGBoost models for each cluster.
+2. **Hierarchical Modeling:** Alternatively, utilize an architecture that learns global patterns (fixed effects) while allowing coefficients to vary by store or region (random effects). 
+3. **Justification:** This approach effectively captures non-linear feature interactions (e.g., Rural customers reacting exponentially better to Flat Discounts) while sharing statistical strength across statistically similar stores, preventing the "average of everything fits nothing" dilemma of a single global model.
+
+---
+
+## B2. Data and EDA Strategy
+
+### (a) Data Integration and Grain
+The transition from transactional logs to a model-ready dataset requires careful joins to prevent temporal data leakage. 
+
+* **Join Architecture:**
+    1. Base: `calendar` table filtered to the target historical window.
+    2. Cross Join with `store_attributes` to create a complete matrix of all stores for all dates.
+    3. Left Join `promotion_details` on `store_id` and `date`.
+    4. Left Join aggregated `transactions` on `store_id` and `date`.
+* **Modelling Grain:** **One row = One Store-Month.**
+* **Aggregations Performed (Pre-Modelling):**
+    * **Target:** `SUM(items_sold)` partitioned by store and month.
+    * **Temporal:** `COUNT(festival_days)` and `COUNT(weekend_days)` per month.
+    * **Behavioral Lags:** `AVG(items_sold_previous_3_months)` to establish a rolling baseline.
+    * **Contextual:** `AVG(monthly_footfall)`.
+
+### (b) Exploratory Data Analysis (EDA)
+A robust EDA phase dictates feature engineering priorities. Key analyses include:
+
+| Analytical Technique | Diagnostic Purpose | Impact on Modelling Decisions |
+| :--- | :--- | :--- |
+| **Distribution Analysis (Violin Plots)**<br>*(Items Sold by Promo Type)* | Identify median performance and variance spreads across different promotions. | If distributions are highly skewed (e.g., rare massive sales spikes), the target variable may require a log transformation (e.g., $log(1 + y)$). |
+| **Multicollinearity Check (VIF / Correlation Matrix)** | Identify independent variables that provide redundant information (e.g., Store Size and Baseline Footfall). | Highly correlated features will be pruned or subjected to Principal Component Analysis (PCA) to stabilize model coefficients. |
+| **Time-Series Decomposition** | Separate the dataset into Trend, Seasonality, and Residual components. | Informs the creation of temporal features (e.g., month-of-year indicators) to ensure the model attributes sales spikes to the promotion, not just organic holiday lifts. |
+| **Interaction Plots**<br>*(Promo Type vs. Location Category)* | Visualize if the slopes of sales lift intersect when comparing promotion types across different store geographies. | Verifies the hypothesis from B1(c). If lines intersect sharply, it mathematically confirms that location-based clustering or explicit interaction terms are strictly necessary. |
+
+### (c) Mitigating Class Imbalance (80% No-Promotion Baseline)
+If 80% of the training data represents the "No Promotion" control state, standard regression models will bias heavily toward baseline averages, treating the 20% promotional lifts as statistical outliers to be smoothed over.
+
+**Corrective Strategies:**
+1. **Target Transformation (Lift Prediction):** Instead of predicting absolute sales, predict the **Incremental Lift**. Calculate the historical rolling average for a store without promotions, subtract it from the actual sales, and train the model exclusively on the delta ($\Delta y$). This normalizes the 80% baseline to near zero.
+2. **Causal Inference (Meta-Learners):** Deploy an Uplift Modeling framework (such as a T-Learner). Train Model A strictly on the 80% "No Promotion" data to establish a highly accurate baseline. Train Model B on the 20% "Promotion" data. The true predicted effect is the difference between Model B and Model A.
+3. **Sample Weighting:** If maintaining a single model, apply Cost-Sensitive Learning by utilizing inverse frequency weighting in the algorithm's loss function, penalizing the model more heavily for errors made on the minority (promotional) class rows.

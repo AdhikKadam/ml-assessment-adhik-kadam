@@ -25,3 +25,20 @@ A "Global Model" risks washing out the nuances of rural vs. urban behavior. Inst
 2. **Train Segment-Specific Models:** Create three distinct models—one for Urban, one for Semi-urban, and one for Rural.
 3. **Justification:** * **Feature Interaction:** Rural customers might be highly sensitive to "Flat Discounts" due to price consciousness, while Urban customers might prefer "Loyalty Points" or "Free Gifts."
     - **Variance Reduction:** A global model might try to find an "average" that fits no one. Segmented models allow the weights of the input features to differ significantly. For instance, "Competition Density" might be a massive predictor in Urban centers but statistically irrelevant in isolated Rural areas.
+
+## B2. Data and EDA Strategy
+**(a) Data Integration and Grain**
+To build the model, we must move from raw transactional logs to a structured "Snapshot" of store performance.
+- **The Join Logic:**
+    - Start with the **Transactions** table.
+    - Left Join **Store Attributes** on store_id.
+    - Left Join **Calendar** on transaction_date.
+    - Join **Promotion Details** based on the promotion active in that specific store during that date range.
+- **Final Modeling Grain: One row = One Store-Month**
+     - Since the team runs one promotion per store per month, the model needs to see the cumulative effect of that decision.
+- **Aggregations Required:**
+    - **Sum** of items_sold (Target variable).
+    - **Average** monthly_footfall.
+    - **Count** of festival_days and weekends in that month.
+    - **Mode** of customer_demographic (to capture the primary shopper type for that month).
+
