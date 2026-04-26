@@ -64,3 +64,62 @@ If 80% of the training data represents the "No Promotion" control state, standar
 1. **Target Transformation (Lift Prediction):** Instead of predicting absolute sales, predict the **Incremental Lift**. Calculate the historical rolling average for a store without promotions, subtract it from the actual sales, and train the model exclusively on the delta ($\Delta y$). This normalizes the 80% baseline to near zero.
 2. **Causal Inference (Meta-Learners):** Deploy an Uplift Modeling framework (such as a T-Learner). Train Model A strictly on the 80% "No Promotion" data to establish a highly accurate baseline. Train Model B on the 20% "Promotion" data. The true predicted effect is the difference between Model B and Model A.
 3. **Sample Weighting:** If maintaining a single model, apply Cost-Sensitive Learning by utilizing inverse frequency weighting in the algorithm's loss function, penalizing the model more heavily for errors made on the minority (promotional) class rows.
+
+
+
+## B3. Model Evaluation and Deployment
+
+### (a) Train-Test Split and Evaluation Strategy
+
+**The Splitting Strategy: Temporal (Chronological) Split**
+With three years of monthly data, a **Time-Series / Chronological Split** is strictly required. For example:
+* **Training Set:** Years 1 and 2 (Months 1-24).
+* **Validation/Test Set:** Year 3 (Months 25-36) or an expanding window forward-chaining cross-validation.
+
+**Why a Random Split is Inappropriate:**
+A random split (like `train_test_split` in scikit-learn) would cause **Temporal Data Leakage**. If you randomly shuffle the data, the model might train on December 2025 data and then be asked to "predict" November 2025. In the real world, you cannot use future knowledge to predict the past. Retail is highly seasonal; the model must prove it can learn from past cycles to predict *future, unseen* cycles.
+
+**Evaluation Metrics & Interpretation:**
+To evaluate regression performance in a business context, I would use:
+
+1.  **Mean Absolute Error (MAE):** * *What it is:* The absolute average difference between predicted and actual items sold.
+    * *Business Interpretation:* "On average, our model's volume prediction is off by $\pm 150$ items per store." It is highly intuitive for stakeholders.
+2.  **Root Mean Squared Error (RMSE):**
+    * *What it is:* Similar to MAE, but squares the errors before averaging, penalizing larger mistakes heavily.
+    * *Business Interpretation:* If under-stocking a highly successful promotion by 1,000 items is disproportionately more damaging to the brand than missing by 100 items ten times, RMSE will highlight these severe misses.
+3.  **Weighted Mean Absolute Percentage Error (WMAPE):**
+    * *What it is:* Sum of absolute errors divided by the sum of actual values.
+    * *Business Interpretation:* "The model has an overall error rate of 8% across total sales volume." It prevents large stores (which naturally have larger absolute errors) from entirely skewing a standard MAPE metric.
+
+### (b) Investigating and Communicating Time-Varying Recommendations
+
+If the model recommends different promotions for Store 12 in December vs. March, it demonstrates that the model is correctly utilizing dynamic features rather than just memorizing static store attributes. 
+
+**Investigation Strategy: Local Feature Importance (SHAP)**
+Global feature importance tells us what drives the model overall, but to explain specific, individual predictions, I would use **SHAP (SHapley Additive exPlanations) values**. SHAP breaks down exactly how much each feature contributed to pushing a specific prediction higher or lower than the baseline average.
+
+**Communication to the Marketing Team:**
+I would present the team with two **SHAP Waterfall Charts** (one for December, one for March) and explain the narrative the data tells:
+
+* **The December Story:** "In December, the SHAP chart shows that the `Holiday_Season` flag and `Historical_High_Footfall` features pushed the predicted sales for the 'Loyalty Points' promotion exceptionally high. Customers are already buying gifts (footfall is naturally high); rewarding them with points capitalizes on this volume without sacrificing the immediate margin like a Flat Discount would."
+* **The March Story:** "In March, the SHAP chart shows a negative impact from `Off_Peak_Season` and `Low_Footfall`. However, the 'Flat Discount' prediction was pushed up because historical data shows this specific location responds elastically to direct price cuts during slow months. The model is using the discount to artificially generate footfall when organic traffic is low."
+
+### (c) End-to-End Deployment and Monitoring
+
+To operationalize the model for monthly zero-touch inference, we need a robust MLOps pipeline.
+
+**1. Model Serialization:**
+After final training, the model artifact (e.g., an XGBoost or LightGBM object) and the entire preprocessing pipeline (imputers, scalers, one-hot encoders) are serialized together using tools like `joblib`, `pickle`, or converted to an `ONNX` format. This artifact is stored in a model registry (e.g., MLflow, AWS SageMaker).
+
+**2. The Monthly Inference Pipeline (Batch Processing):**
+A job scheduler (like Apache Airflow or an AWS EventBridge CRON job) triggers at the end of every month:
+* **Data Prep:** An automated SQL script queries the data warehouse for the upcoming month's calendar features, calculates the latest rolling footfall baselines, and pulls current store attributes.
+* **The Matrix:** The script creates a "scoring grid." For each of the 50 stores, it creates 5 identical rows. It then injects one of the 5 promotion types into each row, resulting in 250 rows total.
+* **Prediction:** The saved model is loaded into memory, processes the 250 rows, and outputs predicted `items_sold` for each.
+* **Optimization:** A script groups the results by `store_id`, applies an `argmax()` function to select the promotion with the highest predicted volume, and exports the final 50 recommendations to a dashboard (like Tableau) or directly to the marketing team's CRM.
+
+**3. Monitoring and Degradation Detection:**
+Models degrade over time as consumer behavior changes (e.g., a recession alters spending habits).
+* **Data Drift Monitoring:** Track the distributions of incoming monthly features against the training data. If a store's average footfall drops by 40% due to local construction, an alert is triggered indicating the model is operating in an unseen data space.
+* **Performance Monitoring (Concept Drift):** At the end of every month, join the actual sales data back to the predictions. Calculate the rolling MAE and WMAPE. 
+* **Retraining Trigger:** Set a hard threshold (e.g., "If WMAPE exceeds 12% for two consecutive months"). When breached, an alert is sent to the data science team to investigate, append the newest data, and retrain the model.
